@@ -11,7 +11,6 @@ type ApiResponse = {
 };
 
 const LS_KEYS = {
-  stopId: "ctl.stopId",
   walk: "ctl.walkMin",
   buffer: "ctl.bufferMin",
 };
@@ -24,18 +23,10 @@ export default function App() {
     []
   );
 
-  // --- dynamic stop selection (defaults to vardar) ---
-  const [stopId, setStopId] = useState<string>(() => {
-    return localStorage.getItem(LS_KEYS.stopId) || "vardar";
-  });
+  // fixed stop for now: Вардар
+  const stopId = "vardar";
 
-  // for now we only have the Vardar endpoint on the backend; leave hooks for more
-  const knownStops: { id: string; label: string }[] = [
-    { id: "vardar", label: "Вардар (vardar)" },
-    // later: { id: "serdika", label: "Сердика (serdika)" }, etc.
-  ];
-
-  // --- PoC “when to leave” inputs ---
+  // --- when-to-leave inputs ---
   const [walkMin, setWalkMin] = useState<number>(() => {
     const n = Number(localStorage.getItem(LS_KEYS.walk));
     return Number.isFinite(n) && n >= 0 ? n : 7;
@@ -45,10 +36,7 @@ export default function App() {
     return Number.isFinite(n) && n >= 0 ? n : 2;
   });
 
-  // persist small prefs
-  useEffect(() => {
-    localStorage.setItem(LS_KEYS.stopId, stopId);
-  }, [stopId]);
+  // persist prefs
   useEffect(() => {
     localStorage.setItem(LS_KEYS.walk, String(walkMin));
   }, [walkMin]);
@@ -75,7 +63,9 @@ export default function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as ApiResponse;
       setData(json);
-      setStatus(`Updated at ${new Date(json.generatedAt ?? Date.now()).toLocaleTimeString()}`);
+      setStatus(
+        `Updated at ${new Date(json.generatedAt ?? Date.now()).toLocaleTimeString()}`
+      );
     } catch (e: any) {
       setStatus(`Error: ${e?.message ?? String(e)}`);
       setData(null);
@@ -90,168 +80,342 @@ export default function App() {
       if (t) clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, baseUrl, stopId]);
+  }, [auto, baseUrl]);
 
-  // find first arrival that is not “late” to highlight it
-  const firstMakeableIdx =
-    data?.arrivals?.findIndex((x) => adviceFor(x.inMinutes).tone !== "late") ?? -1;
+  // --- filter arrivals to only metro lines "1" and "4" ---
+  const metroOnly = (data?.arrivals ?? []).filter((a) =>
+    a.line === "1" || a.line === "4"
+  );
 
-  return (
-    <main style={{ fontFamily: "system-ui", padding: 16, maxWidth: 820, margin: "0 auto" }}>
-      <header style={{ display: "grid", gap: 8, justifyItems: "center" }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <code>{baseUrl}</code>
-          <button onClick={load}>Refresh</button>
-          <label>
-            <input
-              type="checkbox"
-              checked={auto}
-              onChange={(e) => setAuto(e.target.checked)}
-            />{" "}
-            Auto-refresh (15 s)
-          </label>
-        </div>
+  // group by line
+  const arrivalsByLine: Record<string, Arrival[]> = {
+    "1": [],
+    "4": [],
+  };
+  for (const a of metroOnly) {
+    if (a.line === "1") arrivalsByLine["1"].push(a);
+    else if (a.line === "4") arrivalsByLine["4"].push(a);
+  }
 
-        <h1 style={{ margin: 0 }}>
-          {data?.stopName ? `${data.stopName} — Live Arrivals` : "Live Arrivals"}
-        </h1>
+  // helper to render a block for a specific metro line
+  function LineBlock({ lineId, label }: { lineId: "1" | "4"; label: string }) {
+    const arrs = arrivalsByLine[lineId];
 
-        <div style={{ color: "#666" }}>{status}</div>
+    // find the first makeable for highlight inside this line only
+    const firstMakeableIdx = arrs.findIndex(
+      (x) => adviceFor(x.inMinutes).tone !== "late"
+    );
 
-        {/* stop selector (dropdown + manual override) */}
+    return (
+      <div
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(230,240,255,0.9) 100%)",
+          borderRadius: 16,
+          boxShadow:
+            "0 8px 24px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.1)",
+          border: "1px solid rgba(0,0,0,0.05)",
+          padding: "16px 20px",
+        }}
+      >
         <div
           style={{
             display: "flex",
-            gap: 12,
-            alignItems: "center",
             flexWrap: "wrap",
-            justifyContent: "center",
-            marginTop: 4,
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            marginBottom: 12,
           }}
         >
-          <label>
-            Stop:&nbsp;
-            <select
-              value={stopId}
-              onChange={(e) => setStopId(e.target.value)}
-              style={{ padding: "4px 8px" }}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <span
+              style={{
+                backgroundColor: "#003A8C",
+                color: "white",
+                fontWeight: 600,
+                borderRadius: 12,
+                padding: "4px 10px",
+                fontSize: "1rem",
+                lineHeight: 1.2,
+                minWidth: 44,
+                textAlign: "center",
+              }}
             >
-              {knownStops.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <span style={{ color: "#888" }}>or</span>
-
-          <label>
-            Custom stopId:&nbsp;
-            <input
-              value={stopId}
-              onChange={(e) => setStopId(e.target.value.trim())}
-              placeholder="e.g. vardar"
-              style={{ padding: "4px 8px", width: 180 }}
-            />
-          </label>
-
-          {/* when-to-leave inputs */}
-          <label>
-            Walk (min):&nbsp;
-            <input
-              type="number"
-              min={0}
-              value={walkMin}
-              onChange={(e) => setWalkMin(Math.max(0, Number(e.target.value)))}
-              style={{ width: 64, padding: "4px 6px" }}
-            />
-          </label>
-
-          <label>
-            Buffer (min):&nbsp;
-            <input
-              type="number"
-              min={0}
-              value={bufferMin}
-              onChange={(e) => setBufferMin(Math.max(0, Number(e.target.value)))}
-              style={{ width: 64, padding: "4px 6px" }}
-            />
-          </label>
-        </div>
-      </header>
-
-      <section style={{ marginTop: 12 }}>
-        <div>
-          <strong>Lines:</strong> {data?.lines?.length ? data.lines.join(", ") : "–"}
+              M{label}
+            </span>
+            <span
+              style={{
+                fontSize: "1rem",
+                color: "#003A8C",
+                fontWeight: 600,
+              }}
+            >
+              Line {label}
+            </span>
+          </div>
         </div>
 
-        <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-          {(data?.arrivals ?? []).length ? (
-            data!.arrivals.map((a, i) => {
+        {arrs.length === 0 ? (
+          <div
+            style={{
+              fontSize: "0.95rem",
+              fontWeight: 500,
+              color: "#555",
+              padding: "8px 0",
+            }}
+          >
+            No upcoming trains
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {arrs.map((a, idx) => {
               const adv = adviceFor(a.inMinutes);
-              const highlight = adv.tone !== "late" && i === firstMakeableIdx;
+              const highlight = adv.tone !== "late" && idx === firstMakeableIdx;
+
               return (
                 <div
-                  key={i}
+                  key={idx}
                   style={{
-                    border: "1px solid #ccc",
                     borderRadius: 12,
-                    padding: 12,
-                    background: highlight ? "#eef7ff" : "white",
+                    border: highlight
+                      ? "2px solid #003A8C"
+                      : "1px solid rgba(0,0,0,0.1)",
+                    backgroundColor: highlight ? "#eaf2ff" : "white",
+                    padding: "12px 14px",
+                    display: "grid",
+                    rowGap: 6,
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
-                      gap: 8,
-                      alignItems: "baseline",
-                      justifyContent: "space-between",
                       flexWrap: "wrap",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: 8,
                     }}
                   >
-                    <div>
-                      <span
-                        style={{
-                          border: "1px solid #ccc",
-                          borderRadius: 8,
-                          padding: "2px 8px",
-                          marginRight: 6,
-                        }}
-                      >
-                        Line {a.line || "?"}
-                      </span>
-                      <span>{a.direction ?? ""}</span>
+                    <div style={{ fontSize: "0.9rem", fontWeight: 500 }}>
+                      {a.direction ?? ""}
                     </div>
-                    <div style={{ color: "#666" }}>arrives in {a.inMinutes} min</div>
+                    <div
+                      style={{ fontSize: "0.8rem", color: "#666", fontWeight: 500 }}
+                    >
+                      arrives in {a.inMinutes} min
+                    </div>
                   </div>
-                  <div style={{ marginTop: 6, fontWeight: 600 }}>
+
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: "1rem",
+                      color:
+                        adv.tone === "late"
+                          ? "#b00020"
+                          : adv.tone === "now"
+                          ? "#d97706"
+                          : "#003A8C",
+                    }}
+                  >
                     {adv.label}
                   </div>
                 </div>
               );
-            })
-          ) : (
-            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-              No upcoming arrivals.
-            </div>
-          )}
-        </div>
-
-        {data?.error && (
-          <div
-            style={{
-              border: "1px solid #f99",
-              background: "#fff4f4",
-              padding: 12,
-              borderRadius: 10,
-              marginTop: 8,
-            }}
-          >
-            {data.error}
+            })}
           </div>
         )}
+      </div>
+    );
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+        padding: 16,
+        maxWidth: 820,
+        margin: "0 auto",
+        display: "grid",
+        gap: 16,
+      }}
+    >
+      {/* Metro-style header */}
+      <header
+        style={{
+          backgroundColor: "#003A8C",
+          color: "white",
+          borderRadius: 16,
+          padding: "16px 20px",
+          boxShadow:
+            "0 12px 32px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+          }}
+        >
+          <div style={{ display: "grid", gap: 4 }}>
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: "1.1rem",
+                lineHeight: 1.2,
+              }}
+            >
+              {data?.stopName
+                ? `${data.stopName} — Metro Arrivals`
+                : "Metro Arrivals"}
+            </div>
+            <div
+              style={{
+                fontSize: "0.8rem",
+                color: "rgba(255,255,255,0.8)",
+                fontWeight: 400,
+              }}
+            >
+              {status}
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              alignItems: "center",
+              color: "white",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+            }}
+          >
+            <code
+              style={{
+                backgroundColor: "rgba(0,0,0,0.3)",
+                borderRadius: 8,
+                padding: "2px 6px",
+                fontSize: "0.7rem",
+                lineHeight: 1.2,
+              }}
+            >
+              {baseUrl}
+            </code>
+            <button
+              onClick={load}
+              style={{
+                backgroundColor: "white",
+                color: "#003A8C",
+                border: "0",
+                borderRadius: 8,
+                padding: "4px 8px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Refresh
+            </button>
+            <label style={{ cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={auto}
+                onChange={(e) => setAuto(e.target.checked)}
+                style={{ marginRight: 4 }}
+              />
+              Auto (15s)
+            </label>
+          </div>
+        </div>
+
+        {/* Walk / Buffer controls */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 16,
+            marginTop: 16,
+            fontSize: "0.8rem",
+            fontWeight: 500,
+          }}
+        >
+          <label style={{ display: "grid", gap: 4, color: "white" }}>
+            <span>Walk to station (min)</span>
+            <input
+              type="number"
+              min={0}
+              value={walkMin}
+              onChange={(e) =>
+                setWalkMin(Math.max(0, Number(e.target.value)))
+              }
+              style={{
+                width: 64,
+                padding: "4px 6px",
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.4)",
+                backgroundColor: "rgba(255,255,255,0.15)",
+                color: "white",
+              }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: 4, color: "white" }}>
+            <span>Extra safety (min)</span>
+            <input
+              type="number"
+              min={0}
+              value={bufferMin}
+              onChange={(e) =>
+                setBufferMin(Math.max(0, Number(e.target.value)))
+              }
+              style={{
+                width: 64,
+                padding: "4px 6px",
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.4)",
+                backgroundColor: "rgba(255,255,255,0.15)",
+                color: "white",
+              }}
+            />
+          </label>
+        </div>
+      </header>
+
+      {/* Metro lines section */}
+      <section
+        style={{
+          display: "grid",
+          gap: 16,
+        }}
+      >
+        <LineBlock lineId="1" label="1" />
+        <LineBlock lineId="4" label="4" />
       </section>
+
+      {/* error block, if any */}
+      {data?.error && (
+        <div
+          style={{
+            border: "1px solid #f99",
+            background: "#fff4f4",
+            padding: 12,
+            borderRadius: 10,
+            fontSize: "0.9rem",
+            fontWeight: 500,
+          }}
+        >
+          {data.error}
+        </div>
+      )}
     </main>
   );
 }
